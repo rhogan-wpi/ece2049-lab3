@@ -1,50 +1,49 @@
-#include <stdlib.h>
-#include <msp430.h>
-#include "peripherals.h"
 #include "functions.h"
-/*----------------------------------------------------------------------------------- */
-// Temperature Sensor Calibration = Reading at 30 degrees C is stored at addr 1A1Ah
-// See end of datasheet for TLV table memory mapping
-#define CALADC12_15V_30C *((unsigned int *)0x1A1A)
-// Temperature Sensor Calibration = Reading at 85 degrees C is stored at addr 1A1Ch
-//See device datasheet for TLV table memory mapping
-#define CALADC12_15V_85C *((unsigned int *)0x1A1C)
-unsigned int in_temp;
-/*----------------------------------------------------------------------------------- */
+
+// Globals
+volatile unsigned int in_temp = 0;
+volatile unsigned int slider = 0;
 volatile long unsigned int global_counter = 16416000;
+volatile float temperatureDegC = 0;
+volatile float temperatureDegF = 0;
+volatile float degC_per_bit = 0;
+volatile unsigned int adc_month = 1;
+volatile unsigned int adc_date = 1;
+volatile unsigned int adc_hour = 0;
+volatile unsigned int adc_min = 0;
+volatile unsigned int adc_sec = 0;
+volatile unsigned int bits30, bits85;
+volatile state mode;
 
 #pragma vector=TIMER2_A0_VECTOR //What does this do? No one knows...
 __interrupt void timer_a2() {
   global_counter++;
-  Graphics_clearDisplay(&g_sContext); // Clear the display
-  Graphics_flushBuffer(&g_sContext);
+  // Graphics_clearDisplay(&g_sContext); // Clear the display
+  // Graphics_flushBuffer(&g_sContext);
 }
 
 void main() {
+  WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer. Always need to stop this!!
 
-  /*----------------------------------------------------------------------------------- */
-  volatile float temperatureDegC;
-  volatile float temperatureDegF;
-  volatile float degC_per_bit;
-  volatile float slider;
-  volatile unsigned int bits30, bits85;
-  /*----------------------------------------------------------------------------------- */
+  _BIS_SR(GIE); // Global interrupt enable
 
-  WDTCTL = WDTPW | WDTHOLD;    // Stop watchdog timer. Always need to stop this!!
-  // You can then configure it properly, if desired
+  // Initialize the MSP430
+  // configKeypad();
+  // initLeds();
+  // init_user_leds();
+  // init_board_buttons();
+  // config_ADC(degC_per_bit, bits30, bits85); // Config the ADC12
 
-  // Global interrupt enable
-  _BIS_SR(GIE);
-
-  //Set Port P8.0 (the slider) to digital I/O mode
+  /*************************Testing ONLY******************************** */
+  //Set up Port P8.0 (the slider) to digital I/O mode
+  P8SEL &= ~BIT0;
+  P8DIR |= BIT0;
   P8OUT |= BIT0;
-
-  /*----------------------------------------------------------------------------------- */
   // TODO The ADC needs to read sequentially from the temp sensor, then the slider. It needs to read in from INCH_5 to a MCTL register with a VREF of 5V
   REFCTL0 &= ~REFMSTR; // Reset REFMSTR to hand over control of
   // internal reference voltages to
   // ADC12_A control registers
-  ADC12CTL0 = ADC12SHT0_9 | ADC12REFON | ADC12ON; // Internal ref = 1.5V
+  ADC12CTL0 = ADC12SHT0_9 | ADC12REFON | ADC12ON | ADC12MSC; // Internal ref = 1.5V
   ADC12CTL1 = ADC12SHP + ADC12CONSEQ_1; // Enable sample timer and set sequential mode
   // Using ADC12MEM0 to store reading
   ADC12MCTL0 = ADC12SREF_1 + ADC12INCH_10; // ADC i/p ch A10 = temp sense
@@ -53,121 +52,126 @@ void main() {
   // ACD12SREF_1 = internal ref = 1.5v
   __delay_cycles(100); // delay to allow Ref to settle
   ADC12CTL0 |= ADC12ENC; // Enable conversion
-  // Use calibration data stored in info memory
+  // Use calibration data stored in info memory (1-time setup)
   bits30 = CALADC12_15V_30C;
   bits85 = CALADC12_15V_85C;
   degC_per_bit = ((float)(85.0 - 30.0))/((float)(bits85-bits30));
-  /*----------------------------------------------------------------------------------- */
-
-  // Initialize the MSP430
-  initLeds();
-  init_user_leds();
-  init_buttons();
+  /**************************************************************************** */
+  
   configDisplay();
-  configKeypad();
-  // Clear the display
-  Graphics_clearDisplay(&g_sContext);
-  //Start the A2 timer
-  runtimerA2();
+  Graphics_clearDisplay(&g_sContext); // Clear the display
+  runtimerA2(); // Start the A2 timer
+  // Array for display functions.
+  char date[7] = {0};
+  char time[9] = {0};
+  char tempC_disp[7] = {0};
+  char tempF_disp[7] = {0};
+  // Array for the Moving Average
+  float val_tempC[MOVING_AVERAGE_SIZE] = {0.0};
+  float val_tempF[MOVING_AVERAGE_SIZE] = {0.0};
+  float sum_tempC = 0.0;
+  float sum_tempF = 0.0;
+  unsigned int index = 0;
+
+  mode = DISPLAY; // Main  mode
+  unsigned int user_input = read_launchpad_button(); // Read the User's Push-buttons
+
   while (1) {
-  /*----------------------------------------------------------------------------------- */
-    ADC12CTL0 &= ~ADC12SC; // clear the start bit
-    ADC12CTL0 |= ADC12SC; // Sampling and conversion start
-    // Single conversion (single channel)
-    // Poll busy bit waiting for conversion to complete
-    while (ADC12CTL1 & ADC12BUSY)
-      __no_operation();
-    in_temp = ADC12MEM0; // Read in results if conversion
-    // Temperature in Celsius. See the Device Descriptor Table section in the
-    // System Resets, Interrupts, and Operating Modes, System Control Module
-    // chapter in the device user's guide for background information on the
-    // used formula.
-    temperatureDegC = (float)((long)in_temp - CALADC12_15V_30C) * degC_per_bit +30.0;
-    // Temperature in Fahrenheit Tf = (9/5)*Tc + 32
-    temperatureDegF = temperatureDegC * 9.0/5.0 + 32.0;
-    //Set store the slider value in ADC12MEM1 in slider
-    slider = ADC12MEM1;
-  /*----------------------------------------------------------------------------------- */
-  //You can wrap this in a function but I'm pretty sure it needs to return a pointer to an array to work properly, so you'd need to initialize the array and allocate memory first
-    //Stores month abbreviations  as an array of char in an array
-    const char* month_abbr[] = {
-      "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
-    };
-    //Stores length of month to be used to decrement days later
-    const int month_days[] = {
-      31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
-    };
-        unsigned int month = 0;
-        unsigned int day = global_counter / 86400;
-        int i;
-        for (i = 0; i < 12; i++) {
-          if (day <= month_days[i]) {
-            month = i;
-            break;
-          }
-          day = day - month_days[i];
+    switch(mode) {
+      case DISPLAY: {
+        while(user_input != 1) { // Left button
+          in_temp = ADC_2_Temp(); // ADC Conversion stuff:populate in_temp
+          temperatureDegC = (float)((long)in_temp - CALADC12_15V_30C) * degC_per_bit +30.0;
+          temperatureDegF = temperatureDegC * 9.0/5.0 + 32.0; // Temperature in Fahrenheit Tf = (9/5)*Tc + 32
+          index = global_counter % SIZE;
+          
+          // Moving-average logic
+          sum_tempC -= tempC[index]; // Remove the oldest readings
+          tempC[index] = temperatureDegC;
+          sum_tempC += temperatureDegC; // Add the newest readings
+
+          sum_tempF -= tempF[index];
+          tempF[index] = temperatureDegF;
+          sum_tempF += temperatureDegF;
+          
+          // Display stuff
+          Graphics_clearDisplay(&g_sContext);
+          displayDate(date, global_counter, adc_month, adc_date);
+          Graphics_drawStringCentered(&g_sContext, date, 7, 48, 15, TRANSPARENT_TEXT);
+          
+          displayTime(time, global_counter, adc_hour, adc_min, adc_sec);
+          Graphics_drawStringCentered(&g_sContext, time, 9, 48, 35, TRANSPARENT_TEXT);
+          
+          displayTempC(tempC, (sum_tempC / MOVING_AVERAGE_SIZE));
+          Graphics_drawStringCentered(&g_sContext, tempC_disp, 6, 48, 45, TRANSPARENT_TEXT);
+          
+          displayTempF(tempF, (sum_tempF / MOVING_AVERAGE_SIZE));
+          Graphics_drawStringCentered(&g_sContext, tempF_disp, 6, 48, 55, TRANSPARENT_TEXT);
+          Graphics_flushBuffer(&g_sContext);
         }
-        char day_tens = ((day - (day % 10)) / 10) + '0';
-        char day_ones = (day % 10) + '0';
-        unsigned char disp_date[7];
-        disp_date[0] = month_abbr[month][0];
-        disp_date[1] = month_abbr[month][1];
-        disp_date[2] = month_abbr[month][2];
-        disp_date[3] = ' ';
-        disp_date[4] = day_tens;
-        disp_date[5] = day_ones;
-        disp_date[6] = '\0';
 
-        // Same as above, it needs to have a target to return the array to to be wrapped as a function
-        unsigned int hours = (global_counter / 3600) % 24;
-        unsigned int minutes = (global_counter / 60) % 60;
-        unsigned int seconds = global_counter % 60;
-        char hours_tens = ((hours - (hours % 10)) / 10) + '0';
-        char hours_ones = (hours % 10) + '0';
-        char minutes_tens = ((minutes - (minutes % 10)) / 10) + '0';
-        char minutes_ones = (minutes % 10) + '0';
-        char seconds_tens = ((seconds - (seconds % 10)) / 10) + '0';
-        char seconds_ones = (seconds % 10) + '0';
-        unsigned char disp_time[9];
-        disp_time[0] = hours_tens;
-        disp_time[1] = hours_ones;
-        disp_time[2] = ':';
-        disp_time[3] = minutes_tens;
-        disp_time[4] = minutes_ones;
-        disp_time[5] = ':';
-        disp_time[6] = seconds_tens;
-        disp_time[7] = seconds_ones;
-        disp_time[8] = '\0';
+        mode = EDIT;
+        break;
+      }
 
-        //Yeah I'm not allocating memory by hand
-        temperatureDegC = temperatureDegC * 10;
-        unsigned int int_degC = (unsigned int)temperatureDegC;
-        char c_tens = ((int_degC / 100) % 10) + '0';
-        char c_ones = ((int_degC / 10) % 10) + '0';
-        char c_tenths = (int_degC % 10) + '0';
-        temperatureDegF = temperatureDegF * 10;
-        unsigned char disp_c[6];
-        disp_c[0] = c_tens;
-        disp_c[1] = c_ones;
-        disp_c[2] = '.';
-        disp_c[3] = c_tenths;
-        disp_c[4] = ' ';
-        disp_c[5] = 'C';
-        unsigned int int_degF = (unsigned int)temperatureDegF;
-        char f_tens = ((int_degF / 100) % 10) + '0';
-        char f_ones = ((int_degF / 10) % 10) + '0';
-        char f_tenths = (int_degF % 10) + '0';
-        unsigned char disp_f[6];
-        disp_f[0] = f_tens;
-        disp_f[1] = f_ones;
-        disp_f[2] = '.';
-        disp_f[3] = f_tenths;
-        disp_f[4] = ' ';
-        disp_f[5] = 'F';
-        // Write to the display
-        Graphics_drawStringCentered(&g_sContext, disp_date, 7, 48, 15, TRANSPARENT_TEXT);
-        Graphics_drawStringCentered(&g_sContext, disp_time, 9, 48, 35, TRANSPARENT_TEXT);
-        Graphics_drawStringCentered(&g_sContext, disp_c, 6, 48, 45, TRANSPARENT_TEXT);
-        Graphics_drawStringCentered(&g_sContext, disp_f, 6, 48, 55, TRANSPARENT_TEXT);
-  }
-}
+      case EDIT: {
+        unsigned int num_pressed = 0;
+        while (user_input != 2) { // Right button
+          slider = ADC_2_Time(); // ADC Conversion stuff: populate slider
+          num_pressed += (read_launchpad_button() % 5); // Wrap around to "Month" logic
+          // Traversing logic
+          switch (num_pressed) {
+            case 0: { //MONTH
+              adc_month = 1 + (volatile unsigned int)(slider / ONE_MONTH_IN_ADC);
+              Graphics_clearDisplay(&g_sContext);
+              displayDate(date, 0, adc_month, adc_date); // "Date" has not been updated yet.
+              Graphics_flushBuffer(&g_sContext);
+              break;    
+            }
+
+            case 1: { // DATE
+              if (adc_month == 2) {
+                adc_date = 1 + (volatile unsigned int)(slider / 147);
+              } else if ((adc_month == 4) &&  (adc_month == 6) && (adc_month == 9) && (adc_month == 11)) {
+                adc_date = 1 + (volatile unsigned int)(slider / 137);
+              } else {
+                adc_date = 1 + (volatile unsigned int)(slider / 133);
+              } 
+              Graphics_clearDisplay(&g_sContext);
+              displayDate(date, 0, adc_month, adc_date); // "Month" and "Date" have been updated
+              Graphics_flushBuffer(&g_sContext); 
+              break;   
+            }
+
+            case 2: { // HOUR
+              adc_hour = (volatile unsigned int)(slider / 171);    
+              Graphics_clearDisplay(&g_sContext);
+              displayTime(time, 0, adc_hour, adc_min, adc_sec); // "Min" and "Sec" have not been updated --> use the previous values stored.
+              Graphics_flushBuffer(&g_sContext); 
+              break;
+            }
+
+            case 3: { // MIN
+              adc_min = (volatile unsigned int)(slider / 69);
+              Graphics_clearDisplay(&g_sContext);
+              displayTime(time, 0, adc_hour, adc_min, adc_sec); // "Hour" has been updated. "Sec" has not been updated
+              Graphics_flushBuffer(&g_sContext); 
+              break;
+            }
+
+            case 4: { // SEC
+              adc_sec = (volatile unsigned int)(slider / 69);
+              Graphics_clearDisplay(&g_sContext);
+              displayTime(time, 0, adc_hour, adc_min, adc_sec); // Every param has been updated.
+              Graphics_flushBuffer(&g_sContext);
+              break;    
+            }
+          } // End of switch num_pressed
+        } // End of while loop
+
+        mode = DISPLAY;
+        break;
+      } // End of case EDIT
+    }  // End of switch mode
+  } // End of while(1)
+} // End of main()

@@ -1,98 +1,11 @@
-ECE2049 - Lab 2 - Note:
-- Press * to begin (read_keypad())
-- 3-2-1 timer countdown using TimerA2
-- BuzzerOn() function for the correct pitch
-- Note duration control
-- Button checking duration notes are being played (read_button() and button_to_led())
-- Setting up A2 Timer: resolution = 0.005s
---> Note: A2 Timer should be started at the beginning of the song.
-- Rules and Scoring
-- Press # to get back to lobby (read_keypad)
---------------------------------------------------------------------------------------
-Functions needed:
-- read_keypad() --> Done
-- read_button() --> Done
-- button_to_led() --> Done
-- Overloaded BuzzerOn() 
-- BuzzerOff() - peripherals.c --> Done
-- display_note(duration, pitch)
-	+ Needs seconds in ticks
-- keep_score()
---------------------------------------------------------------------------------------
-Rules and Scoring:
-- Scoring: 1 note = 1 point
-- Add all of them at the end
-	+ If score < X --> lose
-	+ otherwise --> win
+ECE2049 Lab 3 Note & Pseudocode:
 
---------------------------------------------------------------------------------------
-PSEUDOCODE:
-//Set up stuff: header files
-//Set up Timer A2 and ISR
-//Set up Timer B0 and ISR --> Already setup by buzzer_on()
-
-//main()
-while(1) {
-state 1: INIT
-Display Text
-Look for keypad: start if * pressed, otherwise keep polling
-* pressed: state = 2;
-
-state 2: Game on
-start TimerA2 --> 3-2-1 countdown (display)
-
-for loop(i < # notes) {
-Display note 1 (Buzzer and LED)
-Button checking (interrupt)
-Player input (interrupt)
-Check input: 
-Display input (display on LCD, buzzer, led)
-
-Display note 2 until the last note }
-state = 3;
-
-state 3: Game Over
-Display Text
-Wait for # pressed --> state = 1
-}
-
---------------------------------------------------------------------------------------
-Buzzer: (in ticks)
-A = 73
-Bb = 69
-B = 65
-C = 62
-C# = 58
-D = 55
-Eb = 52
-E = 49
-F = 46
-F# = 43
-G = 41
-Ab = 38
-A octave = 36
---------------------------------------------------------------------------------------
-Note duration: converting seconds to tick (1/16, 1/4, 1/3, 1/2, and 1)
-- Other notes can be a multiple of the previous ones.
-- Assume TimerA2, ACLK, Div1, Up mode
-- max_count = (<note_duration_in_sec> * t_CLK) - 1 (ticks)
---> Problem: roundings and ISR hardcoding
-PSEUDOCODE:
-1. Setup the interrupt for the duration of the note.
-2. Write the coressonding ISR that deals with varying max_count
-
-Pseudo-ISR:
-//Globals
-current_note = 0;
-Note song[TOTAL_NOTE] = {array of structs};
-ISR {
-//setup
-//display 1 note logic
-	if (current_note < TOTAL_NOTE) {
-		note_duration(song[current_note].duration);
-		buzzer_on(song[current_note].pitch);
-		current_note ++;
-	}
-//disable stuff
-}
- 
+TODO:
+1. Code the moving 36-average
+	- Array: first in - first out
+2. Code the scroll wheel
+	- Read from the in_value:
+3. Code the successive left button presses to change field (wrap around) & right to accepts and exits. (Edit mode --> Display mode)
+4. Modify the display functions to increase based off a pre-determined time and date.
+5. TODO: add left and right button logic
+6. Add a polling logic for the user's button.
